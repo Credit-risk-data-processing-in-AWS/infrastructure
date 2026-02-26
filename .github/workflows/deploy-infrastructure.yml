@@ -1,0 +1,141 @@
+name: Deploy Infrastructure to AWS
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'template.yaml'
+      - '.github/workflows/deploy-infrastructure.yml'
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-east-1
+  STACK_NAME: experian-risk-stack
+  S3_BUCKET: experian-risk-data-geoffrey
+
+jobs:
+  deploy:
+    name: Deploy CloudFormation Stack
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Validate CloudFormation template
+        run: |
+          aws cloudformation validate-template \
+            --template-body file://template.yaml
+          echo "Template validation successful"
+
+      - name: Check if stack exists
+        id: check_stack
+        run: |
+          if aws cloudformation describe-stacks --stack-name ${{ env.STACK_NAME }} 2>/dev/null; then
+            echo "stack_exists=true" >> $GITHUB_OUTPUT
+            echo "Stack exists, will update"
+          else
+            echo "stack_exists=false" >> $GITHUB_OUTPUT
+            echo "Stack does not exist, will create"
+          fi
+
+      - name: Deploy CloudFormation stack
+        run: |
+          if [ "${{ steps.check_stack.outputs.stack_exists }}" == "true" ]; then
+            echo "Updating existing stack..."
+            aws cloudformation update-stack \
+              --stack-name ${{ env.STACK_NAME }} \
+              --template-body file://template.yaml \
+              --capabilities CAPABILITY_NAMED_IAM \
+              --parameters \
+                ParameterKey=Environment,ParameterValue=prod || {
+                  ERROR_CODE=$?
+                  if [ $ERROR_CODE -eq 254 ] || aws cloudformation describe-stacks --stack-name ${{ env.STACK_NAME }} --query 'Stacks[0].StackStatus' --output text | grep -q "No updates"; then
+                    echo "No changes to deploy"
+                    exit 0
+                  else
+                    exit $ERROR_CODE
+                  fi
+                }
+          else
+            echo "Creating new stack..."
+            aws cloudformation create-stack \
+              --stack-name ${{ env.STACK_NAME }} \
+              --template-body file://template.yaml \
+              --capabilities CAPABILITY_NAMED_IAM \
+              --parameters \
+                ParameterKey=Environment,ParameterValue=prod
+          fi
+
+      - name: Wait for stack operation to complete
+        run: |
+          echo "Waiting for stack operation to complete..."
+          if [ "${{ steps.check_stack.outputs.stack_exists }}" == "true" ]; then
+            aws cloudformation wait stack-update-complete \
+              --stack-name ${{ env.STACK_NAME }} || {
+                echo "Stack update failed or no changes detected"
+                STATUS=$(aws cloudformation describe-stacks --stack-name ${{ env.STACK_NAME }} --query 'Stacks[0].StackStatus' --output text)
+                if [[ "$STATUS" == "UPDATE_COMPLETE" ]] || [[ "$STATUS" == "CREATE_COMPLETE" ]]; then
+                  echo "Stack is in good state: $STATUS"
+                  exit 0
+                fi
+                exit 1
+              }
+          else
+            aws cloudformation wait stack-create-complete \
+              --stack-name ${{ env.STACK_NAME }}
+          fi
+          echo "Stack operation completed successfully"
+
+      - name: Get stack outputs
+        run: |
+          echo "Stack outputs:"
+          aws cloudformation describe-stacks \
+            --stack-name ${{ env.STACK_NAME }} \
+            --query 'Stacks[0].Outputs' \
+            --output table
+
+      - name: Get API Gateway URL
+        id: get_api_url
+        run: |
+          API_URL=$(aws cloudformation describe-stacks \
+            --stack-name ${{ env.STACK_NAME }} \
+            --query 'Stacks[0].Outputs[?OutputKey==`ApiGatewayUrl`].OutputValue' \
+            --output text)
+          echo "API_URL=$API_URL" >> $GITHUB_OUTPUT
+          echo "API Gateway URL: $API_URL"
+
+      - name: Test API Gateway health endpoint
+        run: |
+          sleep 5
+          API_URL="${{ steps.get_api_url.outputs.API_URL }}"
+          echo "Testing $API_URL/health"
+          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" "$API_URL/health" || echo "000")
+          
+          if [ "$RESPONSE" == "200" ]; then
+            echo "API Gateway health check passed (HTTP $RESPONSE)"
+          else
+            echo "Warning: API Gateway returned HTTP $RESPONSE"
+            echo "This may be normal if Lambda code is not deployed yet"
+          fi
+
+      - name: Deployment summary
+        run: |
+          echo "============================================"
+          echo "Infrastructure deployment completed"
+          echo "============================================"
+          echo "Stack: ${{ env.STACK_NAME }}"
+          echo "Region: ${{ env.AWS_REGION }}"
+          echo "API URL: ${{ steps.get_api_url.outputs.API_URL }}"
+          echo "Time: $(date -u)"
+          echo "Commit: ${{ github.sha }}"
+          echo "Triggered by: ${{ github.actor }}"
+          echo "============================================"
