@@ -54,9 +54,7 @@ jobs:
             aws cloudformation update-stack \
               --stack-name ${{ env.STACK_NAME }} \
               --template-body file://template.yaml \
-              --capabilities CAPABILITY_NAMED_IAM \
-              --parameters \
-                ParameterKey=Environment,ParameterValue=prod || {
+              --capabilities CAPABILITY_NAMED_IAM || {
                   ERROR_CODE=$?
                   if [ $ERROR_CODE -eq 254 ] || aws cloudformation describe-stacks --stack-name ${{ env.STACK_NAME }} --query 'Stacks[0].StackStatus' --output text | grep -q "No updates"; then
                     echo "No changes to deploy"
@@ -70,9 +68,7 @@ jobs:
             aws cloudformation create-stack \
               --stack-name ${{ env.STACK_NAME }} \
               --template-body file://template.yaml \
-              --capabilities CAPABILITY_NAMED_IAM \
-              --parameters \
-                ParameterKey=Environment,ParameterValue=prod
+              --capabilities CAPABILITY_NAMED_IAM
           fi
 
       - name: Wait for stack operation to complete
