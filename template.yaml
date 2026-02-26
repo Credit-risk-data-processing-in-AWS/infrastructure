@@ -1,0 +1,155 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Resources:
+  # Bucket S3
+  DataBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: experian-risk-data-geoffrey
+
+  # IAM Role for Lambda Execution con permisos para Athena y Glue
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: ExperianLambdaExecutionRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: [lambda.amazonaws.com]
+            Action: ['sts:AssumeRole']
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: AthenaGlueAccessPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - athena:StartQueryExecution
+                  - athena:GetQueryExecution
+                  - athena:GetQueryResults
+                  - athena:StopQueryExecution
+                  - glue:GetDatabase
+                  - glue:GetTable
+                  - glue:GetPartitions
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub 'arn:aws:s3:::experian-risk-data-geoffrey/*'
+                  - !Sub 'arn:aws:s3:::experian-risk-data-geoffrey'
+
+  # Lambda Function
+  RiskApiLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: ExperianRiskAPIFunction
+      Handler: lambda_function.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: python3.9
+      Timeout: 30
+      MemorySize: 256
+      Environment:
+        Variables:
+          GLUE_DATABASE: !Ref RiskGlueDatabase
+          GLUE_TABLE: risk_processed
+          OUTPUT_BUCKET: experian-risk-data-geoffrey
+      Code:
+        S3Bucket: experian-risk-data-geoffrey
+        S3Key: lambda/lambda_deployment.zip
+      Description: API Lambda para consultar datos de riesgo desde Athena
+
+  # API Gateway
+  ApiGateway:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: RiskAnalysisAPI
+  
+  # Base de datos lógica en Glue para organizar las tablas
+  RiskGlueDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: experian_risk_db
+
+  # El Crawler que escanea la carpeta /processed/
+  RiskDataCrawler:
+    Type: AWS::Glue::Crawler
+    Properties:
+      Name: risk-data-crawler
+      Role: !GetAtt GlueServiceRole.Arn
+      DatabaseName: !Ref RiskGlueDatabase
+      Targets:
+        S3Targets:
+          - Path: s3://experian-risk-data-geoffrey/processed/
+      SchemaChangePolicy:
+        UpdateBehavior: "UPDATE_IN_DATABASE"
+        DeleteBehavior: "DEPRECATE_IN_DATABASE"
+      TablePrefix: "risk_"
+
+  # Glue ETL Job para procesar transacciones
+  RiskETLJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: experian-risk-etl-job
+      Role: !GetAtt GlueServiceRole.Arn
+      Command:
+        Name: glueetl
+        ScriptLocation: s3://experian-risk-data-geoffrey/scripts/RiskProcessor.scala
+        PythonVersion: "3"
+      DefaultArguments:
+        "--job-language": "scala"
+        "--class": "GlueApp"
+        "--enable-metrics": "true"
+        "--enable-spark-ui": "true"
+        "--enable-job-insights": "true"
+        "--enable-glue-datacatalog": "true"
+        "--enable-continuous-cloudwatch-log": "true"
+        "--job-bookmark-option": "job-bookmark-enable"
+        "--TempDir": "s3://experian-risk-data-geoffrey/temp/"
+      MaxRetries: 1
+      Timeout: 60
+      GlueVersion: "4.0"
+      MaxCapacity: 2.0
+      Description: "ETL Job to process financial risk transactions"
+      Tags:
+        Project: "ExperianRisk"
+        Environment: "Dev"
+
+  # Rol de IAM para que Glue tenga permiso de leer/escribir en S3 y usar el catálogo
+  GlueServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: ExperianGlueServiceRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: [glue.amazonaws.com]
+            Action: ['sts:AssumeRole']
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+      Policies:
+        - PolicyName: S3AccessPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource:
+                  - !Sub 'arn:aws:s3:::experian-risk-data-geoffrey/*'
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource:
+                  - !Sub 'arn:aws:s3:::experian-risk-data-geoffrey'
