@@ -323,18 +323,6 @@ Resources:
       Description: Production stage
       TracingEnabled: true
 
-Outputs:
-  ApiGatewayUrl:
-    Description: URL del API Gateway
-    Value: !Sub 'https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/prod'
-    Export:
-      Name: RiskAnalysisApiUrl
-  
-  LambdaFunctionArn:
-    Description: ARN de la funcion Lambda
-    Value: !GetAtt RiskApiLambda.Arn
-    Export:
-      Name: RiskApiLambdaArn
   # El Crawler que escanea la carpeta /processed/
   RiskDataCrawler:
     Type: AWS::Glue::Crawler
@@ -379,7 +367,7 @@ Outputs:
         Project: "ExperianRisk"
         Environment: "Dev"
 
-  # Rol de IAM para que Glue tenga permiso de leer/escribir en S3 y usar el catálogo
+  # Rol de IAM para que Glue tenga permiso de leer/escribir en S3 y usar el catalogo
   GlueServiceRole:
     Type: AWS::IAM::Role
     Properties:
@@ -410,3 +398,16 @@ Outputs:
                   - s3:ListBucket
                 Resource:
                   - !Sub 'arn:aws:s3:::experian-risk-data-geoffrey'
+
+Outputs:
+  ApiGatewayUrl:
+    Description: URL del API Gateway
+    Value: !Sub 'https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/prod'
+    Export:
+      Name: RiskAnalysisApiUrl
+  
+  LambdaFunctionArn:
+    Description: ARN de la funcion Lambda
+    Value: !GetAtt RiskApiLambda.Arn
+    Export:
+      Name: RiskApiLambdaArn
