@@ -58,7 +58,7 @@ Resources:
     DependsOn: RiskGlueDatabase
     Properties:
       FunctionName: ExperianRiskAPIFunction
-      Handler: lambda_function.lambda_handler
+      Handler: index.lambda_handler
       Role: !GetAtt LambdaExecutionRole.Arn
       Runtime: python3.9
       Timeout: 30
@@ -69,8 +69,19 @@ Resources:
           GLUE_TABLE: risk_processed
           OUTPUT_BUCKET: experian-risk-data-geoffrey
       Code:
-        S3Bucket: experian-risk-data-geoffrey
-        S3Key: lambda/lambda_deployment.zip
+        ZipFile: |
+          import json
+          def lambda_handler(event, context):
+              return {
+                  'statusCode': 200,
+                  'headers': {
+                      'Access-Control-Allow-Origin': '*',
+                      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+                      'Access-Control-Allow-Headers': 'Content-Type',
+                      'Content-Type': 'application/json'
+                  },
+                  'body': json.dumps({'message': 'Lambda created by CloudFormation - will be updated by CI/CD'})
+              }
       Description: API Lambda para consultar datos de riesgo desde Athena
 
   # API Gateway
