@@ -44,9 +44,27 @@ jobs:
             if [[ "$STATUS" == "ROLLBACK_COMPLETE" ]] || [[ "$STATUS" == "ROLLBACK_FAILED" ]] || [[ "$STATUS" == "DELETE_FAILED" ]]; then
               echo "Stack is in failed state ($STATUS), deleting..."
               aws cloudformation delete-stack --stack-name ${{ env.STACK_NAME }}
-              aws cloudformation wait stack-delete-complete --stack-name ${{ env.STACK_NAME }}
+              
+              # Wait for deletion, but continue if it fails (DELETE_FAILED state)
+              if aws cloudformation wait stack-delete-complete --stack-name ${{ env.STACK_NAME }} 2>/dev/null; then
+                echo "Stack deleted successfully"
+              else
+                echo "Stack deletion encountered issues, checking final state..."
+                FINAL_STATUS=$(aws cloudformation describe-stacks --stack-name ${{ env.STACK_NAME }} --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "DELETED")
+                
+                if [[ "$FINAL_STATUS" == "DELETED" ]] || [[ "$FINAL_STATUS" == "" ]]; then
+                  echo "Stack successfully deleted"
+                elif [[ "$FINAL_STATUS" == "DELETE_FAILED" ]]; then
+                  echo "Stack in DELETE_FAILED state, will force re-create"
+                  echo "Listing failed resources..."
+                  aws cloudformation describe-stack-events --stack-name ${{ env.STACK_NAME }} \
+                    --query 'StackEvents[?ResourceStatus==`DELETE_FAILED`].[LogicalResourceId,ResourceType]' \
+                    --output table || true
+                fi
+              fi
+              
               echo "stack_exists=false" >> $GITHUB_OUTPUT
-              echo "Stack deleted, will create new"
+              echo "Will create new stack"
             else
               echo "stack_exists=true" >> $GITHUB_OUTPUT
               echo "Stack exists, will update"
@@ -74,10 +92,36 @@ jobs:
                 }
           else
             echo "Creating new stack..."
-            aws cloudformation create-stack \
+            # Try to create, if it fails due to existing stack in DELETE_FAILED, try to force delete first
+            if ! aws cloudformation create-stack \
               --stack-name ${{ env.STACK_NAME }} \
               --template-body file://template.yaml \
-              --capabilities CAPABILITY_NAMED_IAM
+              --capabilities CAPABILITY_NAMED_IAM 2>&1 | tee /tmp/create-output.txt; then
+              
+              if grep -q "already exists" /tmp/create-output.txt || grep -q "DELETE_FAILED" /tmp/create-output.txt; then
+                echo "Stack still exists from failed deletion, attempting force cleanup..."
+                
+                # Get resources that failed to delete
+                aws cloudformation describe-stack-resources --stack-name ${{ env.STACK_NAME }} \
+                  --query 'StackResources[*].[LogicalResourceId,ResourceType,PhysicalResourceId]' \
+                  --output table || true
+                
+                # Force delete the stack again
+                aws cloudformation delete-stack --stack-name ${{ env.STACK_NAME }}
+                sleep 30
+                
+                # Retry create
+                echo "Retrying stack creation..."
+                aws cloudformation create-stack \
+                  --stack-name ${{ env.STACK_NAME }} \
+                  --template-body file://template.yaml \
+                  --capabilities CAPABILITY_NAMED_IAM
+              else
+                # Other error, fail
+                cat /tmp/create-output.txt
+                exit 1
+              fi
+            fi
           fi
 
       - name: Wait for stack operation to complete
