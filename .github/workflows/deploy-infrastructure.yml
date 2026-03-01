@@ -39,9 +39,18 @@ jobs:
       - name: Check if stack exists
         id: check_stack
         run: |
-          if aws cloudformation describe-stacks --stack-name ${{ env.STACK_NAME }} 2>/dev/null; then
-            echo "stack_exists=true" >> $GITHUB_OUTPUT
-            echo "Stack exists, will update"
+          if STATUS=$(aws cloudformation describe-stacks --stack-name ${{ env.STACK_NAME }} --query 'Stacks[0].StackStatus' --output text 2>/dev/null); then
+            echo "Stack exists with status: $STATUS"
+            if [[ "$STATUS" == "ROLLBACK_COMPLETE" ]] || [[ "$STATUS" == "ROLLBACK_FAILED" ]] || [[ "$STATUS" == "DELETE_FAILED" ]]; then
+              echo "Stack is in failed state ($STATUS), deleting..."
+              aws cloudformation delete-stack --stack-name ${{ env.STACK_NAME }}
+              aws cloudformation wait stack-delete-complete --stack-name ${{ env.STACK_NAME }}
+              echo "stack_exists=false" >> $GITHUB_OUTPUT
+              echo "Stack deleted, will create new"
+            else
+              echo "stack_exists=true" >> $GITHUB_OUTPUT
+              echo "Stack exists, will update"
+            fi
           else
             echo "stack_exists=false" >> $GITHUB_OUTPUT
             echo "Stack does not exist, will create"
@@ -77,17 +86,33 @@ jobs:
           if [ "${{ steps.check_stack.outputs.stack_exists }}" == "true" ]; then
             aws cloudformation wait stack-update-complete \
               --stack-name ${{ env.STACK_NAME }} || {
-                echo "Stack update failed or no changes detected"
-                STATUS=$(aws cloudformation describe-stacks --stack-name ${{ env.STACK_NAME }} --query 'Stacks[0].StackStatus' --output text)
+                echo "Stack update wait failed, checking status..."
+                STATUS=$(aws cloudformation describe-stacks --stack-name ${{ env.STACK_NAME }} --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "STACK_DELETED")
+                echo "Current stack status: $STATUS"
                 if [[ "$STATUS" == "UPDATE_COMPLETE" ]] || [[ "$STATUS" == "CREATE_COMPLETE" ]]; then
                   echo "Stack is in good state: $STATUS"
                   exit 0
                 fi
+                echo "Fetching failed events..."
+                aws cloudformation describe-stack-events \
+                  --stack-name ${{ env.STACK_NAME }} \
+                  --query 'StackEvents[?ResourceStatus==`CREATE_FAILED` || ResourceStatus==`UPDATE_FAILED`].[LogicalResourceId,ResourceStatusReason]' \
+                  --output table || echo "Could not fetch events"
                 exit 1
               }
           else
             aws cloudformation wait stack-create-complete \
-              --stack-name ${{ env.STACK_NAME }}
+              --stack-name ${{ env.STACK_NAME }} || {
+                echo "Stack creation wait failed, checking status..."
+                STATUS=$(aws cloudformation describe-stacks --stack-name ${{ env.STACK_NAME }} --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "STACK_DELETED")
+                echo "Current stack status: $STATUS"
+                echo "Fetching failed events..."
+                aws cloudformation describe-stack-events \
+                  --stack-name ${{ env.STACK_NAME }} \
+                  --query 'StackEvents[?ResourceStatus==`CREATE_FAILED`].[LogicalResourceId,ResourceStatusReason]' \
+                  --output table || echo "Could not fetch events"
+                exit 1
+              }
           fi
           echo "Stack operation completed successfully"
 
