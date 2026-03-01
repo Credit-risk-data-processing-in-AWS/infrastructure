@@ -51,14 +51,14 @@ Resources:
     Properties:
       CatalogId: !Ref AWS::AccountId
       DatabaseInput:
-        Name: experian_risk_db
+        Name: !Sub 'experian-risk-db-${AWS::StackName}'
+        Description: Risk analysis database
 
   # Lambda Function
   RiskApiLambda:
     Type: AWS::Lambda::Function
     DependsOn: RiskGlueDatabase
     Properties:
-      FunctionName: ExperianRiskAPIFunction
       Handler: index.lambda_handler
       Role: !GetAtt LambdaExecutionRole.Arn
       Runtime: python3.9
@@ -339,7 +339,6 @@ Resources:
   RiskDataCrawler:
     Type: AWS::Glue::Crawler
     Properties:
-      Name: risk-data-crawler
       Role: !GetAtt GlueServiceRole.Arn
       DatabaseName: !Ref RiskGlueDatabase
       Targets:
@@ -354,7 +353,6 @@ Resources:
   RiskETLJob:
     Type: AWS::Glue::Job
     Properties:
-      Name: experian-risk-etl-job
       Role: !GetAtt GlueServiceRole.Arn
       Command:
         Name: glueetl
@@ -423,8 +421,20 @@ Outputs:
     Export:
       Name: RiskApiLambdaArn
   
+  LambdaFunctionName:
+    Description: Name of the Lambda function
+    Value: !Ref RiskApiLambda
+    Export:
+      Name: RiskApiLambdaName
+  
   DataBucketName:
     Description: S3 Bucket Name for data storage
     Value: !Ref DataBucket
     Export:
       Name: RiskDataBucketName
+  
+  GlueDatabaseName:
+    Description: Glue Database Name
+    Value: !Ref RiskGlueDatabase
+    Export:
+      Name: RiskGlueDatabaseName
