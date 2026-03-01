@@ -1,4 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Experian Risk Analysis Infrastructure - Requires IAM user with Glue, CloudFormation, Lambda, S3, and API Gateway permissions'
 Resources:
   # Bucket S3
   DataBucket:
