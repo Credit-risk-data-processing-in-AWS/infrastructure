@@ -4,13 +4,14 @@ Resources:
   DataBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: experian-risk-data-geoffrey
+      Tags:
+        - Key: Project
+          Value: ExperianRisk
 
   # IAM Role for Lambda Execution con permisos para Athena y Glue
   LambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: ExperianLambdaExecutionRole
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -41,8 +42,8 @@ Resources:
                   - s3:PutObject
                   - s3:ListBucket
                 Resource:
-                  - !Sub 'arn:aws:s3:::experian-risk-data-geoffrey/*'
-                  - !Sub 'arn:aws:s3:::experian-risk-data-geoffrey'
+                  - !Sub 'arn:aws:s3:::${DataBucket}/*'
+                  - !GetAtt DataBucket.Arn
 
   # Base de datos logica en Glue para organizar las tablas
   RiskGlueDatabase:
@@ -67,7 +68,7 @@ Resources:
         Variables:
           GLUE_DATABASE: !Ref RiskGlueDatabase
           GLUE_TABLE: risk_processed
-          OUTPUT_BUCKET: experian-risk-data-geoffrey
+          OUTPUT_BUCKET: !Ref DataBucket
       Code:
         ZipFile: |
           import json
@@ -343,7 +344,7 @@ Resources:
       DatabaseName: !Ref RiskGlueDatabase
       Targets:
         S3Targets:
-          - Path: s3://experian-risk-data-geoffrey/processed/
+          - Path: !Sub 's3://${DataBucket}/processed/'
       SchemaChangePolicy:
         UpdateBehavior: "UPDATE_IN_DATABASE"
         DeleteBehavior: "DEPRECATE_IN_DATABASE"
@@ -357,7 +358,7 @@ Resources:
       Role: !GetAtt GlueServiceRole.Arn
       Command:
         Name: glueetl
-        ScriptLocation: s3://experian-risk-data-geoffrey/scripts/RiskProcessor.scala
+        ScriptLocation: !Sub 's3://${DataBucket}/scripts/RiskProcessor.scala'
         PythonVersion: "3"
       DefaultArguments:
         "--job-language": "scala"
@@ -368,7 +369,7 @@ Resources:
         "--enable-glue-datacatalog": "true"
         "--enable-continuous-cloudwatch-log": "true"
         "--job-bookmark-option": "job-bookmark-enable"
-        "--TempDir": "s3://experian-risk-data-geoffrey/temp/"
+        "--TempDir": !Sub 's3://${DataBucket}/temp/'
       MaxRetries: 1
       Timeout: 60
       GlueVersion: "4.0"
@@ -382,7 +383,6 @@ Resources:
   GlueServiceRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: ExperianGlueServiceRole
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -403,12 +403,12 @@ Resources:
                   - s3:PutObject
                   - s3:DeleteObject
                 Resource:
-                  - !Sub 'arn:aws:s3:::experian-risk-data-geoffrey/*'
+                  - !Sub 'arn:aws:s3:::${DataBucket}/*'
               - Effect: Allow
                 Action:
                   - s3:ListBucket
                 Resource:
-                  - !Sub 'arn:aws:s3:::experian-risk-data-geoffrey'
+                  - !GetAtt DataBucket.Arn
 
 Outputs:
   ApiGatewayUrl:
@@ -422,3 +422,9 @@ Outputs:
     Value: !GetAtt RiskApiLambda.Arn
     Export:
       Name: RiskApiLambdaArn
+  
+  DataBucketName:
+    Description: S3 Bucket Name for data storage
+    Value: !Ref DataBucket
+    Export:
+      Name: RiskDataBucketName
